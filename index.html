@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="cs" class="h-full w-full m-0 p-0 overflow-hidden">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Interaktivní mapa</title>
+
+  <!-- LOKÁLNÍ KNIHOVNY (Složka lib/) -->
+  <link rel="stylesheet" href="lib/leaflet.css">
+  <script src="lib/tailwind.js"></script>
+  <script src="lib/leaflet.js"></script>
+  <script src="lib/lucide.min.js"></script>
+  <script src="lib/xlsx.full.min.js"></script>
+  <script src="lib/proj4.js"></script>
+
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #020617;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+
+    #map {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 1;
+      background: #020617;
+    }
+
+    /* Čisté statické bodové tečky */
+    .custom-dot-marker {
+      background: none;
+      border: none;
+    }
+    
+    .dot-element {
+      width: 16px;
+      height: 16px;
+      background-color: #2563eb;
+      border: 2.5px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+      cursor: pointer;
+      transition: transform 0.15s ease-in-out, background-color 0.15s ease;
+    }
+
+    .dot-element:hover {
+      transform: scale(1.3);
+      background-color: #3b82f6;
+    }
+
+    /* Scrollbar pro modal */
+    .custom-scroll::-webkit-scrollbar {
+      width: 6px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body class="relative w-full h-full select-none">
+
+  <!-- MAPOVÝ KONTEJNER (100% obrazovky) -->
+  <div id="map"></div>
+
+  <!-- PLOVOUCÍ OVLÁDACÍ TLAČÍTKA -->
+  <div class="absolute top-4 right-4 z-20 flex flex-col gap-2">
+    <!-- Vyhledávání -->
+    <button id="searchToggleBtn" onclick="toggleSearchModal()" class="w-12 h-12 bg-slate-900/80 hover:bg-slate-800 text-white rounded-xl backdrop-blur-md border border-slate-700/50 shadow-xl flex items-center justify-center transition">
+      <i data-lucide="search" class="w-6 h-6"></i>
+    </button>
+    <!-- Reset pohledu -->
+    <button onclick="resetMapView()" class="w-12 h-12 bg-slate-900/80 hover:bg-slate-800 text-white rounded-xl backdrop-blur-md border border-slate-700/50 shadow-xl flex items-center justify-center transition" title="Obnovit výchozí pohled">
+      <i data-lucide="rotate-ccw" class="w-5 h-5"></i>
+    </button>
+  </div>
+
+  <!-- VYHLEDÁVACÍ ROZHRANÍ -->
+  <div id="searchModal" class="hidden absolute top-20 right-4 z-20 w-80 sm:w-96 bg-slate-900/90 backdrop-blur-xl border border-slate-700/60 rounded-2xl p-4 shadow-2xl text-white">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="font-semibold text-slate-200 text-sm">Vyhledat v mapě</h3>
+      <button onclick="toggleSearchModal()" class="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+    </div>
+    
+    <div class="relative mb-3">
+      <i data-lucide="search" class="absolute left-3 top-2.5 w-4 h-4 text-slate-400"></i>
+      <input type="text" id="searchInput" oninput="filterPoints()" placeholder="Hledat název nebo popis..." class="w-full bg-slate-800/80 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-500">
+    </div>
+
+    <div id="searchResults" class="max-h-60 overflow-y-auto custom-scroll space-y-1">
+      <!-- Výsledky hledání -->
+    </div>
+  </div>
+
+  <!-- DETAILNÍ KARTA O BODU (MODAL) -->
+  <div id="modalOverlay" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/30 backdrop-blur-[2px] transition-all duration-300 opacity-0">
+    <div class="absolute inset-0" onclick="closeModal()"></div>
+
+    <div id="modalCard" class="relative z-10 w-full max-w-xl bg-slate-900/95 border border-slate-700/80 rounded-3xl shadow-2xl text-white overflow-hidden transform scale-95 transition-all duration-300 flex flex-col max-h-[85vh]">
+      
+      <!-- Hlavička karty -->
+      <div class="flex items-center justify-between p-5 border-b border-slate-800/80 bg-slate-900/50">
+        <div>
+          <span id="modalCategory" class="inline-block px-2.5 py-0.5 text-xs font-semibold bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-full mb-1">
+            Kategorie
+          </span>
+          <h2 id="modalTitle" class="text-xl sm:text-2xl font-bold text-white tracking-tight">
+            Název lokality
+          </h2>
+        </div>
+        <button onclick="closeModal()" class="p-2 bg-slate-800/60 hover:bg-slate-700 text-slate-300 hover:text-white rounded-full transition border border-slate-700/50">
+          <i data-lucide="x" class="w-6 h-6"></i>
+        </button>
+      </div>
+
+      <!-- Tělo karty -->
+      <div class="p-5 overflow-y-auto custom-scroll flex-1">
+        <div id="modalImageContainer" class="mb-4 rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 hidden">
+          <img id="modalImage" src="" alt="" class="w-full h-56 sm:h-64 object-cover">
+        </div>
+        <div id="modalText" class="text-slate-300 text-sm sm:text-base leading-relaxed space-y-3">
+          <!-- Dynamický text -->
+        </div>
+      </div>
+
+      <!-- Patička s navigací -->
+      <div id="modalFooter" class="flex items-center justify-between p-4 border-t border-slate-800/80 bg-slate-900/80">
+        <button id="prevPageBtn" onclick="changePage(-1)" class="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-medium transition disabled:opacity-30 disabled:cursor-not-allowed">
+          <i data-lucide="chevron-left" class="w-4 h-4"></i> Předchozí
+        </button>
+
+        <span id="pageIndicator" class="text-xs font-medium text-slate-400 tracking-wider uppercase">
+          Strana 1 z 1
+        </span>
+
+        <button id="nextPageBtn" onclick="changePage(1)" class="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-sm font-medium transition disabled:opacity-30 disabled:cursor-not-allowed">
+          Další <i data-lucide="chevron-right" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- APLIKAČNÍ LOGIKA -->
+  <script>
+    // ==========================================
+    // 1. REGISTRACE KŘOVÁKOVA ZOBRAZENÍ (S-JTSK)
+    // ==========================================
+    proj4.defs("EPSG:5514", "+proj=krovak +lat_0=49.5 +lon_0=24.83333333333333 +alpha=30.28813975277778 +k=0.9999 +x_0=0 +y_0=0 +ellps=bessel +towgs84=570.8,85.7,462.8,4.998,1.587,5.261,3.56 +units=m +no_defs");
+
+    // Hodnoty z vašeho souboru World File (.jgw)
+    const WORLD_FILE = {
+      pixelSizeX: 0.577203977372,
+      pixelSizeY: -0.577133449027,
+      originX: -590438.502616716432, // Levý horní X (S-JTSK)
+      originY: -1147578.880368462764  // Levý horní Y (S-JTSK)
+    };
+
+    // PŘESNÉ ROZLIŠENÍ OBRÁZKU MAPA.JPG
+    const IMAGE_SIZE = {
+      width: 3507,
+      height: 2480
+    };
+
+    const CONFIG = {
+      imageUrl: 'mapa.jpg',
+      excelUrl: 'body.xlsx'
+    };
+
+    // ==========================================
+    // 2. MATEMATICKÝ PREPOČET GPS (WGS84) NA PIXELY OBRÁZKU
+    // ==========================================
+    function gpsToPixel(lat, lng) {
+      // 1. Převod GPS [lng, lat] -> S-JTSK [x, y]
+      const sjtsk = proj4("EPSG:4326", "EPSG:5514", [lng, lat]);
+      const sjtskX = sjtsk[0];
+      const sjtskY = sjtsk[1];
+
+      // 2. Převod metrických souřadnic na pixely obrázku
+      const pixelX = (sjtskX - WORLD_FILE.originX) / WORLD_FILE.pixelSizeX;
+      const pixelY = IMAGE_SIZE.height - ((sjtskY - WORLD_FILE.originY) / WORLD_FILE.pixelSizeY);
+
+      return [pixelY, pixelX];
+    }
+
+    // ==========================================
+    // 3. INICIALIZACE MAPY A STRUKTURY
+    // ==========================================
+    let map, imageLayer;
+    let pointsData = [];
+    let markersMap = new Map();
+    let lastMapState = { center: null, zoom: null };
+
+    let currentPoint = null;
+    let currentPageIndex = 0;
+
+    const imageBounds = [[0, 0], [IMAGE_SIZE.height, IMAGE_SIZE.width]];
+
+    function initMap() {
+      map = L.map('map', {
+        crs: L.CRS.Simple,
+        minZoom: -2,
+        maxZoom: 2,
+        zoomControl: false,
+        attributionControl: false
+      });
+
+      L.control.zoom({ position: 'topleft' }).addTo(map);
+
+      // Vložení podkladového JPEG obrázku
+      imageLayer = L.imageOverlay(CONFIG.imageUrl, imageBounds).addTo(map);
+      map.fitBounds(imageBounds);
+
+      // Načtení dat z Excelu
+      loadPointsFromExcel();
+
+      lucide.createIcons();
+      setTimeout(() => { map.invalidateSize(); }, 200);
+    }
+
+    // ==========================================
+    // 4. NAČÍTÁNÍ Z EXCELU (body.xlsx)
+    // ==========================================
+    async function loadPointsFromExcel() {
+      try {
+        const response = await fetch(CONFIG.excelUrl);
+        const arrayBuffer = await response.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const rawData = XLSX.utils.sheet_to_json(worksheet);
+
+        pointsData = rawData.map((row, index) => {
+          const pages = [];
+          
+          for (let i = 1; i <= 5; i++) {
+            if (row[`text${i}`] || row[`image${i}`]) {
+              pages.push({
+                text: row[`text${i}`] || '',
+                image: row[`image${i}`] || ''
+              });
+            }
+          }
+
+          return {
+            id: index + 1,
+            title: row.title || 'Bez názvu',
+            category: row.category || '',
+            lat: parseFloat(row.lat),
+            lng: parseFloat(row.lng),
+            pages: pages
+          };
+        });
+
+        renderPoints(pointsData);
+      } catch (error) {
+        console.error('Chyba při načítání souboru body.xlsx:', error);
+      }
+    }
+
+    // ==========================================
+    // 5. VYKRESLOVÁNÍ BODŮ NA MAPĚ
+    // ==========================================
+    function renderPoints(points) {
+      markersMap.forEach(marker => map.removeLayer(marker));
+      markersMap.clear();
+
+      points.forEach(pt => {
+        if (isNaN(pt.lat) || isNaN(pt.lng)) return;
+
+        // Přepočet GPS souřadnice z Excelu na pixely
+        const [pxY, pxX] = gpsToPixel(pt.lat, pt.lng);
+
+        const customIcon = L.divIcon({
+          className: 'custom-dot-marker',
+          html: `<div class="dot-element" title="${pt.title}"></div>`,
+          iconSize: [16, 16],
+          iconAnchor: [8, 8]
+        });
+
+        const marker = L.marker([pxY, pxX], { icon: customIcon }).addTo(map);
+
+        marker.on('click', () => {
+          onPointClick(pt, [pxY, pxX]);
+        });
+
+        markersMap.set(pt.id, marker);
+      });
+    }
+
+    // ==========================================
+    // 6. CHOVÁNÍ MODALU A NAVIGACE
+    // ==========================================
+    function onPointClick(point, pixelCoords) {
+      lastMapState = {
+        center: map.getCenter(),
+        zoom: map.getZoom()
+      };
+
+      map.flyTo(pixelCoords, 0.5, { duration: 0.8 });
+      openModal(point);
+    }
+
+    function openModal(point) {
+      currentPoint = point;
+      currentPageIndex = 0;
+
+      document.getElementById('modalCategory').innerText = point.category || 'Detail';
+      document.getElementById('modalTitle').innerText = point.title;
+
+      updateModalPage();
+
+      const overlay = document.getElementById('modalOverlay');
+      const card = document.getElementById('modalCard');
+
+      overlay.classList.remove('hidden');
+      setTimeout(() => {
+        overlay.classList.remove('opacity-0');
+        card.classList.remove('scale-95');
+        card.classList.add('scale-100');
+      }, 10);
+    }
+
+    function updateModalPage() {
+      if (!currentPoint || !currentPoint.pages || currentPoint.pages.length === 0) return;
+
+      const page = currentPoint.pages[currentPageIndex];
+      const totalPages = currentPoint.pages.length;
+
+      document.getElementById('modalText').innerText = page.text || '';
+
+      const imgContainer = document.getElementById('modalImageContainer');
+      const imgEl = document.getElementById('modalImage');
+      if (page.image) {
+        imgEl.src = page.image;
+        imgContainer.classList.remove('hidden');
+      } else {
+        imgContainer.classList.add('hidden');
+      }
+
+      document.getElementById('pageIndicator').innerText = `Strana ${currentPageIndex + 1} z ${totalPages}`;
+      document.getElementById('prevPageBtn').disabled = (currentPageIndex === 0);
+      document.getElementById('nextPageBtn').disabled = (currentPageIndex === totalPages - 1);
+
+      const footer = document.getElementById('modalFooter');
+      if (totalPages <= 1) {
+        footer.classList.add('hidden');
+      } else {
+        footer.classList.remove('hidden');
+      }
+    }
+
+    function changePage(delta) {
+      if (!currentPoint) return;
+      const newIndex = currentPageIndex + delta;
+      if (newIndex >= 0 && newIndex < currentPoint.pages.length) {
+        currentPageIndex = newIndex;
+        updateModalPage();
+      }
+    }
+
+    function closeModal() {
+      const overlay = document.getElementById('modalOverlay');
+      const card = document.getElementById('modalCard');
+
+      overlay.classList.add('opacity-0');
+      card.classList.remove('scale-100');
+      card.classList.add('scale-95');
+
+      setTimeout(() => {
+        overlay.classList.add('hidden');
+        if (lastMapState.center) {
+          map.flyTo(lastMapState.center, lastMapState.zoom, { duration: 0.8 });
+        }
+      }, 300);
+    }
+
+    function resetMapView() {
+      map.fitBounds(imageBounds);
+    }
+
+    // ==========================================
+    // 7. VYHLEDÁVÁNÍ
+    // ==========================================
+    function toggleSearchModal() {
+      const searchModal = document.getElementById('searchModal');
+      searchModal.classList.toggle('hidden');
+      if (!searchModal.classList.contains('hidden')) {
+        document.getElementById('searchInput').focus();
+        filterPoints();
+      }
+    }
+
+    function filterPoints() {
+      const query = document.getElementById('searchInput').value.toLowerCase();
+      const resultsContainer = document.getElementById('searchResults');
+      resultsContainer.innerHTML = '';
+
+      const filtered = pointsData.filter(p => {
+        const titleMatch = p.title.toLowerCase().includes(query);
+        const textMatch = p.pages.some(page => page.text && page.text.toLowerCase().includes(query));
+        return titleMatch || textMatch;
+      });
+
+      if (filtered.length === 0) {
+        resultsContainer.innerHTML = `<div class="p-3 text-xs text-slate-400 text-center">Žádné výsledky</div>`;
+        return;
+      }
+
+      filtered.forEach(pt => {
+        const item = document.createElement('button');
+        item.className = 'w-full text-left p-2.5 rounded-xl hover:bg-slate-800/80 transition flex items-center justify-between group';
+        item.innerHTML = `
+          <div>
+            <div class="text-sm font-medium text-slate-200 group-hover:text-blue-400">${pt.title}</div>
+            <div class="text-xs text-slate-400">${pt.category || ''}</div>
+          </div>
+          <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 opacity-0 group-hover:opacity-100 transition"></i>
+        `;
+        item.onclick = () => {
+          toggleSearchModal();
+          const [pxY, pxX] = gpsToPixel(pt.lat, pt.lng);
+          onPointClick(pt, [pxY, pxX]);
+        };
+        resultsContainer.appendChild(item);
+      });
+
+      lucide.createIcons();
+    }
+
+    window.addEventListener('DOMContentLoaded', initMap);
+  </script>
+</body>
+</html>
