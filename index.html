@@ -184,15 +184,13 @@
     };
 
     // ==========================================
-    // 2. MATEMATICKÝ PREPOČET GPS (WGS84) NA PIXELY OBRÁZKU
+    // 2. PREPOČET GPS (WGS84) NA PIXELY OBRÁZKU
     // ==========================================
     function gpsToPixel(lat, lng) {
-      // 1. Převod GPS [lng, lat] -> S-JTSK [x, y]
       const sjtsk = proj4("EPSG:4326", "EPSG:5514", [lng, lat]);
       const sjtskX = sjtsk[0];
       const sjtskY = sjtsk[1];
 
-      // 2. Převod metrických souřadnic na pixely obrázku
       const pixelX = (sjtskX - WORLD_FILE.originX) / WORLD_FILE.pixelSizeX;
       const pixelY = IMAGE_SIZE.height - ((sjtskY - WORLD_FILE.originY) / WORLD_FILE.pixelSizeY);
 
@@ -213,15 +211,16 @@
     const imageBounds = [[0, 0], [IMAGE_SIZE.height, IMAGE_SIZE.width]];
 
     function initMap() {
+      // Vytvoření mapy OMEZENÉ přesně na rozměry obrázku bez černých okrajů
       map = L.map('map', {
         crs: L.CRS.Simple,
         minZoom: -2,
-        maxZoom: 2,
-        zoomControl: false,
-        attributionControl: false
+        maxZoom: 3,
+        zoomControl: false,             // Odstraněna tlačítka +/- vlevo nahoře
+        attributionControl: false,
+        maxBounds: imageBounds,          // Zamezí scrollování mimo obrázek
+        maxBoundsViscosity: 1.0          // Zamezí pružení mimo hranice
       });
-
-      L.control.zoom({ position: 'topleft' }).addTo(map);
 
       // Vložení podkladového JPEG obrázku
       imageLayer = L.imageOverlay(CONFIG.imageUrl, imageBounds).addTo(map);
@@ -285,7 +284,6 @@
       points.forEach(pt => {
         if (isNaN(pt.lat) || isNaN(pt.lng)) return;
 
-        // Přepočet GPS souřadnice z Excelu na pixely
         const [pxY, pxX] = gpsToPixel(pt.lat, pt.lng);
 
         const customIcon = L.divIcon({
@@ -314,7 +312,7 @@
         zoom: map.getZoom()
       };
 
-      map.flyTo(pixelCoords, 0.5, { duration: 0.8 });
+      map.flyTo(pixelCoords, 1, { duration: 0.8 });
       openModal(point);
     }
 
