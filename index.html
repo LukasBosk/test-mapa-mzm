@@ -196,7 +196,6 @@
     function calculateMinZoom() {
       const zoomX = Math.log2(window.innerWidth / imageSize.width);
       const zoomY = Math.log2(window.innerHeight / imageSize.height);
-      // Math.max zajistí, že obrazovka bude VŽDY plně pokryta obrázkem
       return Math.max(zoomX, zoomY);
     }
 
@@ -215,16 +214,19 @@
           minZoom: minZoom,
           maxZoom: 3,
           zoomControl: false,
-          attributionControl: false
+          attributionControl: false,
+          maxBounds: imageBounds,       // Zamezí posunu mimo rozměry obrázku
+          maxBoundsViscosity: 1.0,       // Okamžitě zastaví mapu na okraji obrázku (žádné pružení/černé okraje)
+          bounceAtZoomLimits: false
         });
 
         imageLayer = L.imageOverlay(CONFIG.imageUrl, imageBounds).addTo(map);
         
-        // Nastavíme výchozí pohled na střed obrázku s minimálním bezpečným zoomem
+        // Nastavíme výchozí pohled na střed s přesným pokrytím okna
         const centerPoint = [imageSize.height / 2, imageSize.width / 2];
         map.setView(centerPoint, minZoom);
 
-        // Dynamická úprava při změně okna prohlížeče
+        // Dynamická úprava při změně velikosti okna
         window.addEventListener('resize', () => {
           const newMinZoom = calculateMinZoom();
           map.setMinZoom(newMinZoom);
@@ -312,8 +314,7 @@
 
     // 6. CHOVÁNÍ MODALU
     function onPointClick(point, pixelCoords) {
-      // Plynule vycentruje kliknutý bod bez jakéhokoliv uskakování
-      const targetZoom = Math.max(map.getZoom(), 0.5);
+      // Při kliknutí na bod na kraji se mapa posune bez uskočení
       map.panTo(pixelCoords, { animate: true, duration: 0.5 });
       openModal(point);
     }
