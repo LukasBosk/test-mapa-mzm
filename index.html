@@ -36,19 +36,19 @@
       background: #020617;
     }
 
-    /* Čisté statické bodové tečky */
+    /* Bodové značky */
     .custom-dot-marker {
       background: none;
       border: none;
     }
     
     .dot-element {
-      width: 16px;
-      height: 16px;
+      width: 18px;
+      height: 18px;
       background-color: #2563eb;
       border: 2.5px solid #ffffff;
       border-radius: 50%;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
       cursor: pointer;
       transition: transform 0.15s ease-in-out, background-color 0.15s ease;
     }
@@ -76,37 +76,6 @@
 
   <!-- MAPOVÝ KONTEJNER (100% obrazovky) -->
   <div id="map"></div>
-
-  <!-- PLOVOUCÍ OVLÁDACÍ TLAČÍTKA -->
-  <div class="absolute top-4 right-4 z-20 flex flex-col gap-2">
-    <!-- Vyhledávání -->
-    <button id="searchToggleBtn" onclick="toggleSearchModal()" class="w-12 h-12 bg-slate-900/80 hover:bg-slate-800 text-white rounded-xl backdrop-blur-md border border-slate-700/50 shadow-xl flex items-center justify-center transition">
-      <i data-lucide="search" class="w-6 h-6"></i>
-    </button>
-    <!-- Reset pohledu -->
-    <button onclick="resetMapView()" class="w-12 h-12 bg-slate-900/80 hover:bg-slate-800 text-white rounded-xl backdrop-blur-md border border-slate-700/50 shadow-xl flex items-center justify-center transition" title="Obnovit výchozí pohled">
-      <i data-lucide="rotate-ccw" class="w-5 h-5"></i>
-    </button>
-  </div>
-
-  <!-- VYHLEDÁVACÍ ROZHRANÍ -->
-  <div id="searchModal" class="hidden absolute top-20 right-4 z-20 w-80 sm:w-96 bg-slate-900/90 backdrop-blur-xl border border-slate-700/60 rounded-2xl p-4 shadow-2xl text-white">
-    <div class="flex items-center justify-between mb-3">
-      <h3 class="font-semibold text-slate-200 text-sm">Vyhledat v mapě</h3>
-      <button onclick="toggleSearchModal()" class="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white">
-        <i data-lucide="x" class="w-5 h-5"></i>
-      </button>
-    </div>
-    
-    <div class="relative mb-3">
-      <i data-lucide="search" class="absolute left-3 top-2.5 w-4 h-4 text-slate-400"></i>
-      <input type="text" id="searchInput" oninput="filterPoints()" placeholder="Hledat název nebo popis..." class="w-full bg-slate-800/80 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-500">
-    </div>
-
-    <div id="searchResults" class="max-h-60 overflow-y-auto custom-scroll space-y-1">
-      <!-- Výsledky hledání -->
-    </div>
-  </div>
 
   <!-- DETAILNÍ KARTA O BODU (MODAL) -->
   <div id="modalOverlay" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/30 backdrop-blur-[2px] transition-all duration-300 opacity-0">
@@ -185,14 +154,13 @@
     let map, imageLayer;
     let pointsData = [];
     let markersMap = new Map();
-    let lastMapState = { center: null, zoom: null };
     let imageBounds = [[0, 0], [0, 0]];
 
     let currentPoint = null;
     let currentPageIndex = 0;
 
     // ==========================================
-    // 2. AUTOMATICKÉ NAČTENÍ JGW A ROZMĚRŮ OBRÁZKU
+    // 2. AUTOMATICKÉ NAČTENÍ JGW A ROZMĚRŮ
     // ==========================================
     async function loadWorldFile() {
       const response = await fetch(CONFIG.jgwUrl);
@@ -216,16 +184,28 @@
       });
     }
 
-    // Prepočet GPS (WGS84) na Pixely
+    // Přepočet GPS (WGS84) -> Pixely
     function gpsToPixel(lat, lng) {
       const sjtsk = proj4("EPSG:4326", "EPSG:5514", [lng, lat]);
       const sjtskX = sjtsk[0];
       const sjtskY = sjtsk[1];
 
       const pixelX = (sjtskX - worldFile.originX) / worldFile.pixelSizeX;
-      const pixelY = imageSize.height - ((sjtskY - worldFile.originY) / worldFile.pixelSizeY);
+      const pixelY = imageSize.height - ((sjtskY - worldFile.originY) / WORLD_FILE_OR_CALC(sjtskY));
 
       return [pixelY, pixelX];
+    }
+
+    function WORLD_FILE_OR_CALC(sjtskY) {
+      return (sjtskY - worldFile.originY) / ( (sjtskY - worldFile.originY) / worldFile.pixelSizeY );
+    }
+
+    // Přesný výpočet souradnic
+    function calcPixelCoords(lat, lng) {
+      const sjtsk = proj4("EPSG:4326", "EPSG:5514", [lng, lat]);
+      const x = (sjtsk[0] - worldFile.originX) / worldFile.pixelSizeX;
+      const y = imageSize.height - ((sjtsk[1] - worldFile.originY) / worldFile.pixelSizeY);
+      return [y, x];
     }
 
     // ==========================================
@@ -233,24 +213,38 @@
     // ==========================================
     async function initMap() {
       try {
-        // Načteme souřadnicový soubor .jgw a fyzické rozměry obrázku súčasně
         await loadWorldFile();
         imageSize = await getImageDimensions(CONFIG.imageUrl);
 
         imageBounds = [[0, 0], [imageSize.height, imageSize.width]];
 
+        // Výpočet minimálního zoomu tak, aby mapa VŽDY vykrývala celé okno bez černých okrajů
+        const minZoomX = Math.log2(window.innerWidth / imageSize.width);
+        const minZoomY = Math.log2(window.innerHeight / imageSize.height);
+        const calculatedMinZoom = Math.max(minZoomX, minZoomY);
+
         map = L.map('map', {
           crs: L.CRS.Simple,
-          minZoom: -2,
+          minZoom: calculatedMinZoom,
           maxZoom: 3,
           zoomControl: false,
           attributionControl: false,
           maxBounds: imageBounds,
-          maxBoundsViscosity: 1.0
+          maxBoundsViscosity: 1.0,
+          bounceAtZoomLimits: false
         });
 
         imageLayer = L.imageOverlay(CONFIG.imageUrl, imageBounds).addTo(map);
+        
+        // Nastavení výchozího zobrazení přesně na střed obrázku
         map.fitBounds(imageBounds);
+
+        // Při změně velikosti okna přepočítat minZoom
+        window.addEventListener('resize', () => {
+          const newMinX = Math.log2(window.innerWidth / imageSize.width);
+          const newMinY = Math.log2(window.innerHeight / imageSize.height);
+          map.setMinZoom(Math.max(newMinX, newMinY));
+        });
 
         // Načtení dat z Excelu
         await loadPointsFromExcel();
@@ -259,7 +253,7 @@
         setTimeout(() => { map.invalidateSize(); }, 200);
 
       } catch (err) {
-        console.error('Chyba při inicializaci mapy nebo načítání souborů:', err);
+        console.error('Chyba při inicializaci mapy:', err);
       }
     }
 
@@ -314,13 +308,13 @@
       points.forEach(pt => {
         if (isNaN(pt.lat) || isNaN(pt.lng)) return;
 
-        const [pxY, pxX] = gpsToPixel(pt.lat, pt.lng);
+        const [pxY, pxX] = calcPixelCoords(pt.lat, pt.lng);
 
         const customIcon = L.divIcon({
           className: 'custom-dot-marker',
           html: `<div class="dot-element" title="${pt.title}"></div>`,
-          iconSize: [16, 16],
-          iconAnchor: [8, 8]
+          iconSize: [18, 18],
+          iconAnchor: [9, 9]
         });
 
         const marker = L.marker([pxY, pxX], { icon: customIcon }).addTo(map);
@@ -334,15 +328,12 @@
     }
 
     // ==========================================
-    // 6. CHOVÁNÍ MODALU A NAVIGACE
+    // 6. CHOVÁNÍ MODALU
     // ==========================================
     function onPointClick(point, pixelCoords) {
-      lastMapState = {
-        center: map.getCenter(),
-        zoom: map.getZoom()
-      };
-
-      map.flyTo(pixelCoords, 1, { duration: 0.8 });
+      // Plynulý posun na bod bez přehnaného skákání
+      const targetZoom = Math.max(map.getZoom(), 0.5);
+      map.setView(pixelCoords, targetZoom, { animate: true, duration: 0.5 });
       openModal(point);
     }
 
@@ -414,63 +405,7 @@
 
       setTimeout(() => {
         overlay.classList.add('hidden');
-        if (lastMapState.center) {
-          map.flyTo(lastMapState.center, lastMapState.zoom, { duration: 0.8 });
-        }
       }, 300);
-    }
-
-    function resetMapView() {
-      map.fitBounds(imageBounds);
-    }
-
-    // ==========================================
-    // 7. VYHLEDÁVÁNÍ
-    // ==========================================
-    function toggleSearchModal() {
-      const searchModal = document.getElementById('searchModal');
-      searchModal.classList.toggle('hidden');
-      if (!searchModal.classList.contains('hidden')) {
-        document.getElementById('searchInput').focus();
-        filterPoints();
-      }
-    }
-
-    function filterPoints() {
-      const query = document.getElementById('searchInput').value.toLowerCase();
-      const resultsContainer = document.getElementById('searchResults');
-      resultsContainer.innerHTML = '';
-
-      const filtered = pointsData.filter(p => {
-        const titleMatch = p.title.toLowerCase().includes(query);
-        const textMatch = p.pages.some(page => page.text && page.text.toLowerCase().includes(query));
-        return titleMatch || textMatch;
-      });
-
-      if (filtered.length === 0) {
-        resultsContainer.innerHTML = `<div class="p-3 text-xs text-slate-400 text-center">Žádné výsledky</div>`;
-        return;
-      }
-
-      filtered.forEach(pt => {
-        const item = document.createElement('button');
-        item.className = 'w-full text-left p-2.5 rounded-xl hover:bg-slate-800/80 transition flex items-center justify-between group';
-        item.innerHTML = `
-          <div>
-            <div class="text-sm font-medium text-slate-200 group-hover:text-blue-400">${pt.title}</div>
-            <div class="text-xs text-slate-400">${pt.category || ''}</div>
-          </div>
-          <i data-lucide="chevron-right" class="w-4 h-4 text-slate-500 opacity-0 group-hover:opacity-100 transition"></i>
-        `;
-        item.onclick = () => {
-          toggleSearchModal();
-          const [pxY, pxX] = gpsToPixel(pt.lat, pt.lng);
-          onPointClick(pt, [pxY, pxX]);
-        };
-        resultsContainer.appendChild(item);
-      });
-
-      lucide.createIcons();
     }
 
     window.addEventListener('DOMContentLoaded', initMap);
