@@ -100,11 +100,11 @@
         </button>
       </div>
 
-      <!-- Tělo karty (Text a pod ním Obrázek) -->
+      <!-- Tělo karty (Text s odstavci a pod ním Obrázek) -->
       <div class="p-5 overflow-y-auto custom-scroll flex-1 space-y-4">
-        <!-- 3. TEXT -->
+        <!-- 3. TEXT (se zarovnáním do bloku a odstavci) -->
         <div id="modalText" class="text-slate-300 text-sm sm:text-base leading-relaxed">
-          <!-- Dynamický text -->
+          <!-- Dynamické odstavce -->
         </div>
 
         <!-- 4. OBRÁZEK (PŘÍPADNÝ) -->
@@ -206,6 +206,40 @@
       const zoomX = Math.log2(window.innerWidth / imageSize.width);
       const zoomY = Math.log2(window.innerHeight / imageSize.height);
       return Math.max(zoomX, zoomY);
+    }
+
+    // Ošetření cílové pozice přiblížení, aby nedošlo k odhalení černých okrajů
+    function getClampedCenter(targetLatLng, targetZoom) {
+      const mapBounds = L.latLngBounds(imageBounds);
+      const mapSize = map.getSize();
+      const scale = map.getZoomScale(targetZoom, 0);
+
+      // Spočítáme velikost viditelné oblasti v souřadnicích mapy při daném zoomu
+      const halfWidth = (mapSize.x / (2 * scale));
+      const halfHeight = (mapSize.y / (2 * scale));
+
+      let clampedY = targetLatLng[0];
+      let clampedX = targetLatLng[1];
+
+      // Hranice obrázku
+      const minY = imageBounds[0][0] + halfHeight;
+      const maxY = imageBounds[1][0] - halfHeight;
+      const minX = imageBounds[0][1] + halfWidth;
+      const maxX = imageBounds[1][1] - halfWidth;
+
+      if (minY <= maxY) {
+        clampedY = Math.max(minY, Math.min(maxY, clampedY));
+      } else {
+        clampedY = imageSize.height / 2;
+      }
+
+      if (minX <= maxX) {
+        clampedX = Math.max(minX, Math.min(maxX, clampedX));
+      } else {
+        clampedX = imageSize.width / 2;
+      }
+
+      return [clampedY, clampedX];
     }
 
     // 3. INICIALIZACE MAPY
@@ -318,17 +352,17 @@
       });
     }
 
-    // 6. CHOVÁNÍ MODALU A ZAZOOMOVÁNÍ
+    // 6. CHOVÁNÍ MODALU A ZAZOOMOVÁNÍ ZABRAŇUJÍCÍ ČERNÝM OKRAŮM
     function onPointClick(point, pixelCoords) {
-      // Uložíme si původní pozici a zoom před kliknutím
       previousZoom = map.getZoom();
       previousCenter = map.getCenter();
 
-      // Určíme cílový zoom (přiblížíme o 1.2 stupně oproti aktuálnímu zoomu)
       const targetZoom = Math.min(map.getMaxZoom(), Math.max(previousZoom + 1.2, 1));
+      
+      // Vypočítáme bezpečný střed tak, aby nevznikly černé okraje
+      const safeCenter = getClampedCenter(pixelCoords, targetZoom);
 
-      // Plynulý posun a zazoomování k bodu
-      map.flyTo(pixelCoords, targetZoom, { animate: true, duration: 0.6 });
+      map.flyTo(safeCenter, targetZoom, { animate: true, duration: 0.6 });
 
       openModal(point);
     }
@@ -337,7 +371,6 @@
       currentPoint = point;
       currentPageIndex = 0;
 
-      // Nastavení názvu a kategorie
       document.getElementById('modalTitle').innerText = point.title;
       document.getElementById('modalCategory').innerText = point.category || 'Detail';
 
@@ -354,14 +387,31 @@
       }, 10);
     }
 
+    // POMOCNÁ FUNKCE PRO FORMÁTOVÁNÍ TEXTU (ODSTAVCE DLE '|', ZAROVNÁNÍ DO BLOKU)
+    function formatTextToParagraphs(rawText) {
+      if (!rawText) return '';
+
+      // Rozdělení textu podle znaku |
+      const paragraphs = rawText.toString().split('|');
+
+      return paragraphs
+        .map(p => {
+          const trimmed = p.trim().replace(/\r?\n/g, '<br>');
+          if (!trimmed) return '';
+          // Třída text-justify zarovná text v odstavci do bloku
+          return `<p class="mb-3 text-justify last:mb-0">${trimmed}</p>`;
+        })
+        .join('');
+    }
+
     function updateModalPage() {
       if (!currentPoint || !currentPoint.pages || currentPoint.pages.length === 0) return;
 
       const page = currentPoint.pages[currentPageIndex];
       const totalPages = currentPoint.pages.length;
 
-      // 3. TEXT
-      document.getElementById('modalText').innerText = page.text || '';
+      // 3. TEXT - převeden na HTML odstavce zarovnané do bloku
+      document.getElementById('modalText').innerHTML = formatTextToParagraphs(page.text);
 
       // 4. OBRÁZEK
       const imgContainer = document.getElementById('modalImageContainer');
@@ -406,7 +456,6 @@
         overlay.classList.add('hidden');
       }, 300);
 
-      // Při zavření okénka se plynule odzoomujeme zpět na předchozí hodnotu a pozici
       if (previousCenter !== null && previousZoom !== null) {
         map.flyTo(previousCenter, previousZoom, { animate: true, duration: 0.6 });
       }
