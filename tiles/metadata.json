@@ -1,0 +1,9 @@
+{
+    "format": "jpg",
+    "name": "morava-2",
+    "version": "1.1",
+    "type": "overlay",
+    "minzoom": "8",
+    "maxzoom": "12",
+    "bounds": "16.0309,48.7968,18.3408,49.9361"
+}
