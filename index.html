@@ -133,22 +133,21 @@
 
   <!-- APLIKAČNÍ LOGIKA -->
   <script>
-    // 1. REGISTRACE KŘOVÁKOVA ZOBRAZENÍ (S-JTSK)
+    // 1. REGISTRACE SOUŘADNICOVÝCH SYSTÉMŮ PRO PROJ4 (S-JTSK -> WGS84)
     proj4.defs("EPSG:5514", "+proj=krovak +lat_0=49.5 +lon_0=24.83333333333333 +alpha=30.28813975277778 +k=0.9999 +x_0=0 +y_0=0 +ellps=bessel +towgs84=570.8,85.7,462.8,4.998,1.587,5.261,3.56 +units=m +no_defs");
+    proj4.defs("EPSG:3857", "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs");
 
     const CONFIG = {
-      imageUrl: 'mapa.jpg',
-      jgwUrl: 'mapa.jgw',
-      excelUrl: 'body.xlsx'
+      tilesUrl: 'tiles/{z}/{x}/{y}.jpg', // Případně změňte na .webp
+      excelUrl: 'body.xlsx',
+      // Rozsah vygenerované mapy z QGISu v EPSG:3857
+      extent3857: [1771221.6638, 6247290.4467, 2055607.4562, 6462693.2407]
     };
 
-    let worldFile = { pixelSizeX: 0, pixelSizeY: 0, originX: 0, originY: 0 };
-    let imageSize = { width: 0, height: 0 };
-
-    let map, imageLayer;
+    let map, tileLayer;
     let pointsData = [];
     let markersMap = new Map();
-    let imageBounds = [[0, 0], [0, 0]];
+    let geoBounds = null;
 
     let currentPoint = null;
     let currentPageIndex = 0;
@@ -156,74 +155,46 @@
     let previousZoom = null;
     let previousCenter = null;
 
-    // 2. NAČTENÍ SOUBORU JGW A ROZMĚRŮ OBRÁZKU
-    async function loadWorldFile() {
-      const response = await fetch(CONFIG.jgwUrl);
-      const text = await response.text();
-      const lines = text.trim().split(/\r?\n/);
-
-      if (lines.length >= 6) {
-        worldFile.pixelSizeX = parseFloat(lines[0]);
-        worldFile.pixelSizeY = parseFloat(lines[3]);
-        worldFile.originX = parseFloat(lines[4]);
-        worldFile.originY = parseFloat(lines[5]);
-      }
+    // Přepočet EPSG:3857 rozsahu na GPS (WGS84 Lat/Lng pro Leaflet)
+    function calculateGeoBounds() {
+      const minCorner = proj4("EPSG:3857", "EPSG:4326", [CONFIG.extent3857[0], CONFIG.extent3857[1]]);
+      const maxCorner = proj4("EPSG:3857", "EPSG:4326", [CONFIG.extent3857[2], CONFIG.extent3857[3]]);
+      
+      return L.latLngBounds(
+        [minCorner[1], minCorner[0]],
+        [maxCorner[1], maxCorner[0]]
+      );
     }
 
-    function getImageDimensions(url) {
-      return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-        img.onerror = reject;
-        img.src = url;
-      });
+    // Přepočet Křováka (S-JTSK) z Excelu na WGS84 (GPS Lat/Lng pro Leaflet)
+    function sjtskToWgs84(x, y) {
+      const wgs84 = proj4("EPSG:5514", "EPSG:4326", [x, y]);
+      return [wgs84[1], wgs84[0]]; // Vrátí [lat, lng]
     }
 
-    // Přepočet GPS -> Pixely
-    function gpsToPixel(lat, lng) {
-      const sjtsk = proj4("EPSG:4326", "EPSG:5514", [lng, lat]);
-      const pixelX = (sjtsk[0] - worldFile.originX) / worldFile.pixelSizeX;
-      const pixelY = imageSize.height - ((sjtsk[1] - worldFile.originY) / worldFile.pixelSizeY);
-      return [pixelY, pixelX];
-    }
-
-    // Minimální zoom bez okrajů při výchozím zobrazení
-    function calculateMinZoom() {
-      const zoomX = Math.log2(window.innerWidth / imageSize.width);
-      const zoomY = Math.log2(window.innerHeight / imageSize.height);
-      return Math.max(zoomX, zoomY);
-    }
-
-    // 3. INICIALIZACE MAPY
+    // 2. INICIALIZACE MAPY S DLAŽDICEMI
     async function initMap() {
       try {
-        await loadWorldFile();
-        imageSize = await getImageDimensions(CONFIG.imageUrl);
-        imageBounds = [[0, 0], [imageSize.height, imageSize.width]];
-
-        const minZoom = calculateMinZoom();
+        geoBounds = calculateGeoBounds();
 
         map = L.map('map', {
-          crs: L.CRS.Simple,
-          minZoom: minZoom,
-          maxZoom: 3,
           zoomControl: false,
           attributionControl: false,
-          maxBounds: imageBounds,
+          maxBounds: geoBounds,
           maxBoundsViscosity: 1.0,
-          bounceAtZoomLimits: false
+          bounceAtZoomLimits: false,
+          minZoom: 8,
+          maxZoom: 14
         });
 
-        imageLayer = L.imageOverlay(CONFIG.imageUrl, imageBounds).addTo(map);
-        map.setView([imageSize.height / 2, imageSize.width / 2], minZoom);
+        tileLayer = L.tileLayer(CONFIG.tilesUrl, {
+          minZoom: 8,
+          maxZoom: 14,
+          bounds: geoBounds,
+          errorTileUrl: ''
+        }).addTo(map);
 
-        window.addEventListener('resize', () => {
-          const newMinZoom = calculateMinZoom();
-          map.setMinZoom(newMinZoom);
-          if (map.getZoom() < newMinZoom) {
-            map.setZoom(newMinZoom);
-          }
-        });
+        map.fitBounds(geoBounds);
 
         await loadPointsFromExcel();
         lucide.createIcons();
@@ -234,7 +205,7 @@
       }
     }
 
-    // 4. NAČÍTÁNÍ Z EXCELU
+    // 3. NAČÍTÁNÍ Z EXCELU (S-JTSK SOUŘADNICE)
     async function loadPointsFromExcel() {
       try {
         const response = await fetch(CONFIG.excelUrl);
@@ -259,8 +230,9 @@
             id: index + 1,
             title: row.title || 'Bez názvu',
             category: row.category || '',
-            lat: parseFloat(row.lat),
-            lng: parseFloat(row.lng),
+            // V Excelu čteme Křovákovy souřadnice z X/Y (případně lat/lng sloupce)
+            sjtskX: parseFloat(row.lat || row.x),
+            sjtskY: parseFloat(row.lng || row.y),
             pages: pages
           };
         });
@@ -271,15 +243,16 @@
       }
     }
 
-    // 5. VYKRESLOVÁNÍ BODŮ
+    // 4. VYKRESLOVÁNÍ BODŮ S AUTOMATICKÝM PŘEPOČTEM DO GPS
     function renderPoints(points) {
       markersMap.forEach(marker => map.removeLayer(marker));
       markersMap.clear();
 
       points.forEach(pt => {
-        if (isNaN(pt.lat) || isNaN(pt.lng)) return;
+        if (isNaN(pt.sjtskX) || isNaN(pt.sjtskY)) return;
 
-        const [pxY, pxX] = gpsToPixel(pt.lat, pt.lng);
+        // Přepočet Křováka z Excelu na GPS souřadnice pro mapové dlaždice
+        const [lat, lng] = sjtskToWgs84(pt.sjtskX, pt.sjtskY);
 
         const customIcon = L.divIcon({
           className: 'custom-dot-marker',
@@ -288,19 +261,19 @@
           iconAnchor: [9, 9]
         });
 
-        const marker = L.marker([pxY, pxX], { icon: customIcon }).addTo(map);
-        marker.on('click', () => onPointClick(pt, [pxY, pxX]));
+        const marker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
+        marker.on('click', () => onPointClick(pt, [lat, lng]));
         markersMap.set(pt.id, marker);
       });
     }
 
-    // 6. CHOVÁNÍ MODALU A PŘIBLÍŽENÍ
-    function onPointClick(point, pixelCoords) {
+    // 5. CHOVÁNÍ MODALU A PŘIBLÍŽENÍ
+    function onPointClick(point, coords) {
       previousZoom = map.getZoom();
       previousCenter = map.getCenter();
 
-      const targetZoom = Math.min(map.getMaxZoom(), Math.max(previousZoom + 1.2, 1));
-      map.flyTo(pixelCoords, targetZoom, { animate: true, duration: 0.6 });
+      const targetZoom = Math.min(map.getMaxZoom(), Math.max(previousZoom + 2, 11));
+      map.flyTo(coords, targetZoom, { animate: true, duration: 0.6 });
 
       openModal(point);
     }
@@ -345,10 +318,8 @@
       const page = currentPoint.pages[currentPageIndex];
       const totalPages = currentPoint.pages.length;
 
-      // 3. TEXT - převod na odstavce oddělené znakem '|'
       document.getElementById('modalText').innerHTML = formatTextToParagraphs(page.text);
 
-      // 4. OBRÁZEK
       const imgContainer = document.getElementById('modalImageContainer');
       const imgEl = document.getElementById('modalImage');
       if (page.image) {
@@ -391,7 +362,6 @@
         overlay.classList.add('hidden');
       }, 300);
 
-      // Návrat na předchozí zoom a střed
       if (previousCenter !== null && previousZoom !== null) {
         map.flyTo(previousCenter, previousZoom, { animate: true, duration: 0.6 });
       }
