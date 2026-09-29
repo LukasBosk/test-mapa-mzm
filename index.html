@@ -138,10 +138,10 @@
     proj4.defs("EPSG:3857", "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs");
 
     const CONFIG = {
-      tilesUrl: 'tiles/{z}/{x}/{y}.jpg', // Případně změňte na .webp
+      tilesUrl: 'tiles/{z}/{x}/{y}.png',
       excelUrl: 'body.xlsx',
-      // Rozsah vygenerované mapy z QGISu v EPSG:3857
-      extent3857: [1771221.6638, 6247290.4467, 2055607.4562, 6462693.2407]
+      // Přesný rozsah zájmové oblasti v EPSG:3857 [Xmin, Ymin, Xmax, Ymax]
+      extent3857: [1784556.0622, 6240455.7341, 2041690.2254, 6435217.2822]
     };
 
     let map, tileLayer;
@@ -184,12 +184,12 @@
           maxBoundsViscosity: 1.0,
           bounceAtZoomLimits: false,
           minZoom: 8,
-          maxZoom: 14
+          maxZoom: 12
         });
 
         tileLayer = L.tileLayer(CONFIG.tilesUrl, {
           minZoom: 8,
-          maxZoom: 14,
+          maxZoom: 12,
           bounds: geoBounds,
           errorTileUrl: ''
         }).addTo(map);
@@ -230,7 +230,7 @@
             id: index + 1,
             title: row.title || 'Bez názvu',
             category: row.category || '',
-            // V Excelu čteme Křovákovy souřadnice z X/Y (případně lat/lng sloupce)
+            // Čteme Křovákovy souřadnice z X/Y (případně lat/lng sloupce)
             sjtskX: parseFloat(row.lat || row.x),
             sjtskY: parseFloat(row.lng || row.y),
             pages: pages
@@ -272,7 +272,7 @@
       previousZoom = map.getZoom();
       previousCenter = map.getCenter();
 
-      const targetZoom = Math.min(map.getMaxZoom(), Math.max(previousZoom + 2, 11));
+      const targetZoom = Math.min(map.getMaxZoom(), Math.max(previousZoom + 1.5, 11));
       map.flyTo(coords, targetZoom, { animate: true, duration: 0.6 });
 
       openModal(point);
